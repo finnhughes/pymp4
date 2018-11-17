@@ -628,6 +628,24 @@ SampleAuxiliaryInformationOffsetsBox = Struct(
     "offsets" / PrefixedArray(Int32ub, Switch(this.version, {0: Int32ub, 1: Int64ub}))
 )
 
+
+TitleBox = Struct(
+    "type" / Const(b"titl"),
+    "version" / Const(Int8ub, 0),
+    "flags" / Const(Int24ub, 0),
+    Embedded(BitStruct(
+        Padding(1),
+        "language" / ISO6392TLanguageCode(BitsInteger(5)[3]),
+    )),
+    "value" / GreedyString(encoding='utf8'),
+)
+
+NameBox = Struct(
+    "type" / Const(b"name"),
+    "value" / GreedyString(encoding='utf8'),
+)
+
+
 # Movie data box
 
 MovieDataBox = Struct(
@@ -719,6 +737,7 @@ UUIDBox = Struct(
 )
 
 ContainerBoxLazy = LazyBound(lambda ctx: ContainerBox)
+VersionedContainerBoxLazy = LazyBound(lambda ctx: VersionedContainerBox)
 
 
 class TellMinusSizeOf(Subconstruct):
@@ -779,6 +798,10 @@ Box = PrefixedIncludingSize(Int32ub, Struct(
         b"saiz": SampleAuxiliaryInformationSizesBox,
         b"saio": SampleAuxiliaryInformationOffsetsBox,
         b"btrt": BitRateBox,
+        b"udta": ContainerBoxLazy,
+        b"meta": VersionedContainerBoxLazy,
+        b"name": NameBox,
+        b"titl": TitleBox,
         # dash
         b"tenc": TrackEncryptionBox,
         b"pssh": ProtectionSystemHeaderBox,
@@ -800,6 +823,13 @@ Box = PrefixedIncludingSize(Int32ub, Struct(
 ContainerBox = Struct(
     "type" / String(4, padchar=b" ", paddir="right"),
     "children" / GreedyRange(Box)
+)
+
+VersionedContainerBox = Struct(
+    "type" / String(4, padchar=b" ", paddir="right"),
+    "version" / Int8ub,
+    "flags" / Const(Int24ub, 0),
+    "children" / GreedyRange(Box),
 )
 
 MP4 = GreedyRange(Box)

@@ -19,7 +19,7 @@ import unittest
 import io
 
 from construct import Container
-from pymp4.parser import Box, SampleEntryBox
+from pymp4.parser import Box, SampleEntryBox, TitleBox, NameBox
 
 log = logging.getLogger(__name__)
 
@@ -152,3 +152,37 @@ class BoxTests(unittest.TestCase):
         input_stream = io.BytesIO(input_bytes + b'padding')
         self.assertEqual(SampleEntryBox.parse_stream(input_stream), expected)
         self.assertEqual(input_stream.tell(), len(input_bytes))
+
+    def test_udta_parse(self):
+        ilst = b'\x00\x00\x00\x25\xA9\x74\x6F\x6F\x00\x00\x00\x1D\x64\x61\x74\x61\x00\x00\x00\x01\x00\x00\x00\x00\x4C\x61\x76\x66\x35\x37\x2E\x32\x35\x2E\x31\x30\x30'
+        input_bytes = (
+            b'\x00\x00\x00\x62udta'
+            b'\x00\x00\x00\x5ameta\x00\x00\x00\x00'
+            b'\x00\x00\x00\x21hdlr\x00\x00\x00\x00\x00\x00\x00\x00mdir\x61\x70\x70\x6C\x00\x00\x00\x00\x00\x00\x00\x00\x00'
+            b'\x00\x00\x00\x2Dilst' + ilst
+        )
+        self.assertEqual(
+            Box.parse(input_bytes),
+            Container(offset=0)(type=b'udta')
+            (children=[
+                Container(offset=8)(type=b'meta')(version=0)(flags=0)(children=[
+                    Container(offset=20)(type=b'hdlr')(version=0)(flags=0)(handler_type=b'mdir')(name=u'')(end=53),
+                    Container(offset=53)(type=b'ilst')(data=ilst)(end=len(input_bytes))
+                ])(end=len(input_bytes))
+            ])(end=len(input_bytes))
+        )
+
+    def test_titl_parse(self):
+        input_bytes = b'titl\x00\x00\x00\x00\x15\xC7TT\x00'
+        self.assertEqual(
+            TitleBox.parse(input_bytes),
+            Container(type=b'titl')(version=0)(flags=0)
+            (language=u'eng')(value=u'TT\x00')
+        )
+
+    def test_name_parse(self):
+        input_bytes = b'nameLatino\x00'
+        self.assertEqual(
+            NameBox.parse(input_bytes),
+            Container(type=b'name')(value=u'Latino\x00')
+        )
