@@ -34,9 +34,18 @@ class PrefixedIncludingSize(Subconstruct):
         self.lengthfield = lengthfield
 
     def _parse(self, stream, context, path):
+        context['flagextended'] = False
         try:
             lengthfield_size = self.lengthfield.sizeof()
             length = self.lengthfield._parse(stream, context, path)
+            if length == 1:
+                context['flagextended'] = True
+                # assume followed by 4 byte type as per mp4 spec
+                position = stream.tell()
+                stream.seek(position + 4)
+                length = Int64ub._parse(stream, context, path)
+                stream.seek(position)
+
         except SizeofError:
             offset_start = stream.tell()
             length = self.lengthfield._parse(stream, context, path)
@@ -99,6 +108,12 @@ SegmentTypeBox = Struct(
 
 RawBox = Struct(
     "type" / String(4, padchar=b" ", paddir="right"),
+    "data" / Default(GreedyBytes, b"")
+)
+
+RawBoxLong = Struct(
+    "type" / String(4, padchar=b" ", paddir="right"),
+    Padding(8),  # extended size already parsed by PrefixedIncludingSize
     "data" / Default(GreedyBytes, b"")
 )
 
@@ -653,6 +668,13 @@ MovieDataBox = Struct(
     "data" / GreedyBytes
 )
 
+
+MovieDataBoxLong = Struct(
+    "type" / Const(b"mdat"),
+    Padding(8),  # extended size already parsed by PrefixedIncludingSize
+    "data" / GreedyBytes
+)
+
 # Media Info Box
 
 SoundMediaHeaderBox = Struct(
@@ -758,65 +780,71 @@ class TellMinusSizeOf(Subconstruct):
 Box = PrefixedIncludingSize(Int32ub, Struct(
     "offset" / TellMinusSizeOf(Int32ub),
     "type" / Peek(String(4, padchar=b" ", paddir="right")),
-    Embedded(Switch(this.type, {
-        b"ftyp": FileTypeBox,
-        b"styp": SegmentTypeBox,
-        b"mvhd": MovieHeaderBox,
-        b"moov": ContainerBoxLazy,
-        b"moof": ContainerBoxLazy,
-        b"mfhd": MovieFragmentHeaderBox,
-        b"tfdt": TrackFragmentBaseMediaDecodeTimeBox,
-        b"trun": TrackRunBox,
-        b"tfhd": TrackFragmentHeaderBox,
-        b"traf": ContainerBoxLazy,
-        b"mvex": ContainerBoxLazy,
-        b"mehd": MovieExtendsHeaderBox,
-        b"trex": TrackExtendsBox,
-        b"trak": ContainerBoxLazy,
-        b"mdia": ContainerBoxLazy,
-        b"tkhd": TrackHeaderBox,
-        b"mdat": MovieDataBox,
-        b"free": FreeBox,
-        b"skip": SkipBox,
-        b"mdhd": MediaHeaderBox,
-        b"hdlr": HandlerReferenceBox,
-        b"minf": ContainerBoxLazy,
-        b"vmhd": VideoMediaHeaderBox,
-        b"dinf": ContainerBoxLazy,
-        b"dref": DataReferenceBox,
-        b"stbl": ContainerBoxLazy,
-        b"stsd": SampleDescriptionBox,
-        b"stsz": SampleSizeBox,
-        b"stz2": SampleSizeBox2,
-        b"stts": TimeToSampleBox,
-        b"stss": SyncSampleBox,
-        b"stsc": SampleToChunkBox,
-        b"stco": ChunkOffsetBox,
-        b"co64": ChunkLargeOffsetBox,
-        b"smhd": SoundMediaHeaderBox,
-        b"sidx": SegmentIndexBox,
-        b"saiz": SampleAuxiliaryInformationSizesBox,
-        b"saio": SampleAuxiliaryInformationOffsetsBox,
-        b"btrt": BitRateBox,
-        b"udta": ContainerBoxLazy,
-        b"meta": VersionedContainerBoxLazy,
-        b"name": NameBox,
-        b"titl": TitleBox,
-        # dash
-        b"tenc": TrackEncryptionBox,
-        b"pssh": ProtectionSystemHeaderBox,
-        b"senc": SampleEncryptionBox,
-        b"sinf": ContainerBoxLazy,
-        b"frma": OriginalFormatBox,
-        b"schm": SchemeTypeBox,
-        b"schi": ContainerBoxLazy,
-        # piff
-        b"uuid": UUIDBox,
-        # HDS boxes
-        b'abst': HDSSegmentBox,
-        b'asrt': HDSSegmentRunBox,
-        b'afrt': HDSFragmentRunBox
-    }, default=RawBox)),
+    IfThenElse(
+        predicate=this._.flagextended,
+        thensubcon=Embedded(Switch(this.type, {
+            b"mdat": MovieDataBoxLong,
+        }, default=RawBoxLong)),
+        elsesubcon=Embedded(Switch(this.type, {
+            b"ftyp": FileTypeBox,
+            b"styp": SegmentTypeBox,
+            b"mvhd": MovieHeaderBox,
+            b"moov": ContainerBoxLazy,
+            b"moof": ContainerBoxLazy,
+            b"mfhd": MovieFragmentHeaderBox,
+            b"tfdt": TrackFragmentBaseMediaDecodeTimeBox,
+            b"trun": TrackRunBox,
+            b"tfhd": TrackFragmentHeaderBox,
+            b"traf": ContainerBoxLazy,
+            b"mvex": ContainerBoxLazy,
+            b"mehd": MovieExtendsHeaderBox,
+            b"trex": TrackExtendsBox,
+            b"trak": ContainerBoxLazy,
+            b"mdia": ContainerBoxLazy,
+            b"tkhd": TrackHeaderBox,
+            b"mdat": MovieDataBox,
+            b"free": FreeBox,
+            b"skip": SkipBox,
+            b"mdhd": MediaHeaderBox,
+            b"hdlr": HandlerReferenceBox,
+            b"minf": ContainerBoxLazy,
+            b"vmhd": VideoMediaHeaderBox,
+            b"dinf": ContainerBoxLazy,
+            b"dref": DataReferenceBox,
+            b"stbl": ContainerBoxLazy,
+            b"stsd": SampleDescriptionBox,
+            b"stsz": SampleSizeBox,
+            b"stz2": SampleSizeBox2,
+            b"stts": TimeToSampleBox,
+            b"stss": SyncSampleBox,
+            b"stsc": SampleToChunkBox,
+            b"stco": ChunkOffsetBox,
+            b"co64": ChunkLargeOffsetBox,
+            b"smhd": SoundMediaHeaderBox,
+            b"sidx": SegmentIndexBox,
+            b"saiz": SampleAuxiliaryInformationSizesBox,
+            b"saio": SampleAuxiliaryInformationOffsetsBox,
+            b"btrt": BitRateBox,
+            b"udta": ContainerBoxLazy,
+            b"meta": VersionedContainerBoxLazy,
+            b"name": NameBox,
+            b"titl": TitleBox,
+            # dash
+            b"tenc": TrackEncryptionBox,
+            b"pssh": ProtectionSystemHeaderBox,
+            b"senc": SampleEncryptionBox,
+            b"sinf": ContainerBoxLazy,
+            b"frma": OriginalFormatBox,
+            b"schm": SchemeTypeBox,
+            b"schi": ContainerBoxLazy,
+            # piff
+            b"uuid": UUIDBox,
+            # HDS boxes
+            b'abst': HDSSegmentBox,
+            b'asrt': HDSSegmentRunBox,
+            b'afrt': HDSFragmentRunBox
+        }, default=RawBox))
+    ),
     "end" / Tell
 ))
 
