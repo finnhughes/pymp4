@@ -281,7 +281,7 @@ HandlerReferenceBox = Struct(
     Padding(4, pattern=b"\x00"),
     "handler_type" / String(4),
     Padding(12, pattern=b"\x00"),  # Int32ub[3]
-    "name" / CString(encoding="utf8")
+    "name" / Select(CString(encoding='utf8'), PascalString(Int8ub, 'utf8')),  # PascalString only for QTFF
 )
 
 # Boxes contained by Media Info Box
@@ -321,7 +321,7 @@ DataReferenceBox = Struct(
     "type" / Const(b"dref"),
     "version" / Const(Int8ub, 0),
     "flags" / Default(Int24ub, 0),
-    "data_entries" / PrefixedArray(Int32ub, Select(DataEntryUrnBox, DataEntryUrlBox)),
+    "data_entries" / PrefixedArray(Int32ub, Select(DataEntryUrnBox, DataEntryUrlBox, RawBox)),  # QTFF has alis and rsrc
 )
 
 # Sample Table boxes (stbl)
