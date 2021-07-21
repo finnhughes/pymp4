@@ -860,4 +860,11 @@ VersionedContainerBox = Struct(
     "children" / GreedyRange(Box),
 )
 
+VersionedContainerBox = Struct(
+    "type" / String(4, padchar=b" ", paddir="right"),
+    "version" / Int8ub,
+    "flags" / Const(Int24ub, 0),
+    "children" / GreedyRange(Box),
+)
+
 MP4 = GreedyRange(Box)
