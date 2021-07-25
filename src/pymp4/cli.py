@@ -5,7 +5,7 @@ import logging
 import argparse
 
 from pymp4.parser import Box
-from construct import setglobalfullprinting
+from construct import setglobalfullprinting, Debugger
 
 log = logging.getLogger(__name__)
 setglobalfullprinting(True)
@@ -23,5 +23,9 @@ def dump():
     fd.seek(0)
 
     while fd.tell() < eof:
-        box = Box.parse_stream(fd)
+        box = Debugger(Box).parse_stream(fd)
         print(box)
+
+
+if __name__ == '__main__':
+    dump()

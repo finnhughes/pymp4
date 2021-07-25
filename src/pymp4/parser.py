@@ -53,6 +53,7 @@ class PrefixedIncludingSize(Subconstruct):
 
         stream2 = BoundBytesIO(stream, length - lengthfield_size)
         obj = self.subcon._parse(stream2, context, path)
+        # obj['length'] = length  # can be handy when troubleshooting
         return obj
 
     def _build(self, obj, stream, context, path):
@@ -282,6 +283,9 @@ HandlerReferenceBox = Struct(
     "handler_type" / String(4),
     Padding(12, pattern=b"\x00"),  # Int32ub[3]
     "name" / Select(CString(encoding='utf8'), PascalString(Int8ub, 'utf8')),  # PascalString only for QTFF
+    # An empty name can use two bytes for a PascalString but since we aren't checking if it's a QT file
+    # it parses as a CString and we only consume the first byte
+    Optional(Const(b"\x00")),
 )
 
 # Boxes contained by Media Info Box
@@ -335,7 +339,8 @@ MP4ASampleEntryBox = Struct(
     "compression_id" / Default(Int16sb, 0),
     "packet_size" / Const(Int16ub, 0),
     "sampling_rate" / Int16ub,
-    Padding(2)
+    Padding(2),
+    "extensions" / GreedyRange(RawBox),
 )
 
 
@@ -347,10 +352,17 @@ class MaskedInteger(Adapter):
         return obj & 0x1F
 
 
-VideoSampleEntryExtensionBox = PrefixedIncludingSize(Int32ub, Struct(
+BitRateBox = Struct(
+    "type" / Const(b"btrt"),
+    "bufferSizeDB" / Int32ub,
+    "maxBitrate" / Int32ub,
+    "avgBirate" / Int32ub,
+)
+
+VisualSampleEntryExtensionBox = PrefixedIncludingSize(Int32ub, Struct(
     "type" / String(4, padchar=b" ", paddir="right"),
     Embedded(Switch(this.type, {
-        b"avcC": Struct(
+        b"avcC": Struct(  # required for avc1
             "version" / Const(Int8ub, 1),
             "profile" / Int8ub,
             "compatibility" / Int8ub,
@@ -364,14 +376,18 @@ VideoSampleEntryExtensionBox = PrefixedIncludingSize(Int32ub, Struct(
             # if profile_idc takes specific values there can be additional information - ignoring
             GreedyBytes
         ),
-        b"pasp": Struct(
+        b"btrt": BitRateBox,  # Optional for avc1
+        # m4ds optional for avc1
+        # colr optional for VisualSampleEntry, may be repeated
+        # clap optional for VisualSampleEntry
+        b"pasp": Struct(  # Optional for VisualSampleEntry
             "h_spacing" / Int32ub,
             "v_spacing" /Int32ub
-        )
+        ),
     }, default=Struct(RawBox))),
 ))
 
-AVC1SampleEntryBox = Struct(
+VisualSampleEntryBox = Struct(  # e.g. avc1
     "version" / Default(Int16ub, 0),
     "revision" / Const(Int16ub, 0),
     "vendor" / Default(String(4, padchar=b" "), b"brdy"),
@@ -388,9 +404,8 @@ AVC1SampleEntryBox = Struct(
     "compressor_name" / Default(String(32, padchar=b" "), ""),
     "depth" / Default(Int16ub, 24),
     "color_table_id" / Default(Int16sb, -1),
-    "extensions" / GreedyRange(VideoSampleEntryExtensionBox),
+    "extensions" / GreedyRange(VisualSampleEntryExtensionBox),
 )
-
 
 SampleEntryBox = PrefixedIncludingSize(Int32ub, Struct(
     "format" / String(4, padchar=b" ", paddir="right"),
@@ -400,23 +415,19 @@ SampleEntryBox = PrefixedIncludingSize(Int32ub, Struct(
         b"ec-3": MP4ASampleEntryBox,
         b"mp4a": MP4ASampleEntryBox,
         b"enca": MP4ASampleEntryBox,
-        b"avc1": AVC1SampleEntryBox,
-        b"encv": AVC1SampleEntryBox
-    }, Struct("data" / GreedyBytes)))
+        b"avc1": VisualSampleEntryBox,
+        b"encv": VisualSampleEntryBox
+    }, Struct("data" / GreedyBytes))),
+    # QT allows an optional 4 bytes terminator e.g. "StreamOn 0.9.0 Demo.mov"
+    # https://developer.apple.com/library/archive/documentation/QuickTime/QTFF/QTFFChap2/qtff2.html#//apple_ref/doc/uid/TP40000939-CH204-61112
+    Optional(Const(Int32ub, 0)),
 ))
-
-BitRateBox = Struct(
-    "type" / Const(b"btrt"),
-    "bufferSizeDB" / Int32ub,
-    "maxBitrate" / Int32ub,
-    "avgBirate" / Int32ub,
-)
 
 SampleDescriptionBox = Struct(
     "type" / Const(b"stsd"),
     "version" / Default(Int8ub, 0),
     "flags" / Const(Int24ub, 0),
-    "entries" / PrefixedArray(Int32ub, SampleEntryBox)
+    "entries" / PrefixedArray(Int32ub, SampleEntryBox),
 )
 
 SampleSizeBox = Struct(
@@ -482,7 +493,7 @@ ChunkOffsetBox = Struct(
     "flags" / Const(Int24ub, 0),
     "entries" / Default(PrefixedArray(Int32ub, Struct(
         "chunk_offset" / Int32ub,
-    )), [])
+    )), []),
 )
 
 ChunkLargeOffsetBox = Struct(
@@ -644,8 +655,8 @@ SampleAuxiliaryInformationOffsetsBox = Struct(
 )
 
 
-TitleBox = Struct(
-    "type" / Const(b"titl"),
+TrackNameBox = Struct(
+    "type" / Const(b"tnam"),
     "version" / Const(Int8ub, 0),
     "flags" / Const(Int24ub, 0),
     Embedded(BitStruct(
@@ -660,19 +671,42 @@ NameBox = Struct(
     "value" / GreedyString(encoding='utf8'),
 )
 
+TrackTitleBox = Struct(
+    "type" / Const(b"\xa9nam"),
+    "data" / GreedyBytes,
+)
+
+TagCBox = Struct(
+    "type" / Const(b"tagc"),
+    "value" / GreedyString(encoding='utf8'),
+)
+
+ExtendedLanguageBox = Struct(
+    "type" / Const(b"elng"),
+    "value" / GreedyString(encoding='utf8'),
+)
+
+UserDataBoxLazy = LazyBound(lambda ctx: Struct(
+    "type" / Const(b"udta"),
+    "children" / GreedyRange(Box),
+    # Possible terminator in QT files
+    # https://developer.apple.com/library/archive/documentation/QuickTime/QTFF/QTFFChap2/qtff2.html#//apple_ref/doc/uid/TP40000939-CH204-BBCCFFGD
+    Optional(Const(Int32ub, 0)),
+))
+
 
 # Movie data box
 
 MovieDataBox = Struct(
     "type" / Const(b"mdat"),
-    "data" / GreedyBytes
+    "data" / GreedyBytes,
 )
 
 
 MovieDataBoxLong = Struct(
     "type" / Const(b"mdat"),
     Padding(8),  # extended size already parsed by PrefixedIncludingSize
-    "data" / GreedyBytes
+    "data" / GreedyBytes,
 )
 
 # Media Info Box
@@ -759,7 +793,9 @@ UUIDBox = Struct(
 )
 
 ContainerBoxLazy = LazyBound(lambda ctx: ContainerBox)
+# ContainerBoxLazyProbe = LazyBound(lambda ctx: ContainerBoxProbe)
 VersionedContainerBoxLazy = LazyBound(lambda ctx: VersionedContainerBox)
+# VersionedContainerBoxLazyProbe = LazyBound(lambda ctx: VersionedContainerBoxProbe)
 
 
 class TellMinusSizeOf(Subconstruct):
@@ -780,78 +816,84 @@ class TellMinusSizeOf(Subconstruct):
 Box = PrefixedIncludingSize(Int32ub, Struct(
     "offset" / TellMinusSizeOf(Int32ub),
     "type" / Peek(String(4, padchar=b" ", paddir="right")),
-    IfThenElse(
-        predicate=this._.flagextended,
-        thensubcon=Embedded(Switch(this.type, {
-            b"mdat": MovieDataBoxLong,
-        }, default=RawBoxLong)),
-        elsesubcon=Embedded(Switch(this.type, {
-            b"ftyp": FileTypeBox,
-            b"styp": SegmentTypeBox,
-            b"mvhd": MovieHeaderBox,
-            b"moov": ContainerBoxLazy,
-            b"moof": ContainerBoxLazy,
-            b"mfhd": MovieFragmentHeaderBox,
-            b"tfdt": TrackFragmentBaseMediaDecodeTimeBox,
-            b"trun": TrackRunBox,
-            b"tfhd": TrackFragmentHeaderBox,
-            b"traf": ContainerBoxLazy,
-            b"mvex": ContainerBoxLazy,
-            b"mehd": MovieExtendsHeaderBox,
-            b"trex": TrackExtendsBox,
-            b"trak": ContainerBoxLazy,
-            b"mdia": ContainerBoxLazy,
-            b"tkhd": TrackHeaderBox,
-            b"mdat": MovieDataBox,
-            b"free": FreeBox,
-            b"skip": SkipBox,
-            b"mdhd": MediaHeaderBox,
-            b"hdlr": HandlerReferenceBox,
-            b"minf": ContainerBoxLazy,
-            b"vmhd": VideoMediaHeaderBox,
-            b"dinf": ContainerBoxLazy,
-            b"dref": DataReferenceBox,
-            b"stbl": ContainerBoxLazy,
-            b"stsd": SampleDescriptionBox,
-            b"stsz": SampleSizeBox,
-            b"stz2": SampleSizeBox2,
-            b"stts": TimeToSampleBox,
-            b"stss": SyncSampleBox,
-            b"stsc": SampleToChunkBox,
-            b"stco": ChunkOffsetBox,
-            b"co64": ChunkLargeOffsetBox,
-            b"smhd": SoundMediaHeaderBox,
-            b"sidx": SegmentIndexBox,
-            b"saiz": SampleAuxiliaryInformationSizesBox,
-            b"saio": SampleAuxiliaryInformationOffsetsBox,
-            b"btrt": BitRateBox,
-            b"udta": ContainerBoxLazy,
-            b"meta": VersionedContainerBoxLazy,
-            b"name": NameBox,
-            b"titl": TitleBox,
-            # dash
-            b"tenc": TrackEncryptionBox,
-            b"pssh": ProtectionSystemHeaderBox,
-            b"senc": SampleEncryptionBox,
-            b"sinf": ContainerBoxLazy,
-            b"frma": OriginalFormatBox,
-            b"schm": SchemeTypeBox,
-            b"schi": ContainerBoxLazy,
-            # piff
-            b"uuid": UUIDBox,
-            # HDS boxes
-            b'abst': HDSSegmentBox,
-            b'asrt': HDSSegmentRunBox,
-            b'afrt': HDSFragmentRunBox
-        }, default=RawBox))
-    ),
+    Embedded(Switch(this.type, {
+        b"ftyp": FileTypeBox,
+        b"styp": SegmentTypeBox,
+        b"mvhd": MovieHeaderBox,
+        b"moov": ContainerBoxLazy,
+        b"moof": ContainerBoxLazy,
+        b"mfhd": MovieFragmentHeaderBox,
+        b"tfdt": TrackFragmentBaseMediaDecodeTimeBox,
+        b"trun": TrackRunBox,
+        b"tfhd": TrackFragmentHeaderBox,
+        b"traf": ContainerBoxLazy,
+        b"mvex": ContainerBoxLazy,
+        b"mehd": MovieExtendsHeaderBox,
+        b"trex": TrackExtendsBox,
+        b"trak": ContainerBoxLazy,
+        b"mdia": ContainerBoxLazy,
+        b"tkhd": TrackHeaderBox,
+        b"mdat": IfThenElse(this._.flagextended, MovieDataBoxLong, MovieDataBox),
+        b"free": FreeBox,
+        b"skip": SkipBox,
+        b"mdhd": MediaHeaderBox,
+        b"hdlr": HandlerReferenceBox,
+        b"minf": ContainerBoxLazy,
+        b"vmhd": VideoMediaHeaderBox,
+        b"dinf": ContainerBoxLazy,
+        b"dref": DataReferenceBox,
+        b"stbl": ContainerBoxLazy,
+        b"stsd": SampleDescriptionBox,
+        b"stsz": SampleSizeBox,
+        b"stz2": SampleSizeBox2,
+        b"stts": TimeToSampleBox,
+        b"stss": SyncSampleBox,
+        b"stsc": SampleToChunkBox,
+        b"stco": ChunkOffsetBox,
+        b"co64": ChunkLargeOffsetBox,
+        b"smhd": SoundMediaHeaderBox,
+        b"sidx": SegmentIndexBox,
+        b"saiz": SampleAuxiliaryInformationSizesBox,
+        b"saio": SampleAuxiliaryInformationOffsetsBox,
+        b"btrt": BitRateBox,
+        b"udta": UserDataBoxLazy,
+        # ISO 14496-12 and QT specs agree the meta atom is versioned
+        # Example files where the versioning is missing include "StreamOn 0.9.0 Demo.mov"
+        b"meta": Select(VersionedContainerBoxLazy, ContainerBoxLazy),
+        b"name": NameBox,
+        b"\xa9nam": TrackTitleBox,
+        b"tnam": TrackNameBox,
+        b"tagc": TagCBox,
+        b"elng": ExtendedLanguageBox,
+        # dash
+        b"tenc": TrackEncryptionBox,
+        b"pssh": ProtectionSystemHeaderBox,
+        b"senc": SampleEncryptionBox,
+        b"sinf": ContainerBoxLazy,
+        b"frma": OriginalFormatBox,
+        b"schm": SchemeTypeBox,
+        b"schi": ContainerBoxLazy,
+        # piff
+        b"uuid": UUIDBox,
+        # HDS boxes
+        b'abst': HDSSegmentBox,
+        b'asrt': HDSSegmentRunBox,
+        b'afrt': HDSFragmentRunBox
+    }, default=RawBox)),
     "end" / Tell
 ))
 
 ContainerBox = Struct(
     "type" / String(4, padchar=b" ", paddir="right"),
-    "children" / GreedyRange(Box)
+    "children" / GreedyRange(Box),
 )
+
+# ContainerBoxProbe = Struct(
+#     "type" / String(4, padchar=b" ", paddir="right"),
+#     "children" / GreedyRange(Box),
+#     "next" / Peek(Bytes(8)),
+#     Probe("ContainerBox"),
+# )
 
 VersionedContainerBox = Struct(
     "type" / String(4, padchar=b" ", paddir="right"),
@@ -860,11 +902,13 @@ VersionedContainerBox = Struct(
     "children" / GreedyRange(Box),
 )
 
-VersionedContainerBox = Struct(
-    "type" / String(4, padchar=b" ", paddir="right"),
-    "version" / Int8ub,
-    "flags" / Const(Int24ub, 0),
-    "children" / GreedyRange(Box),
-)
+# VersionedContainerBoxProbe = Struct(
+#     "type" / String(4, padchar=b" ", paddir="right"),
+#     "version" / Int8ub,
+#     "flags" / Const(Int24ub, 0),
+#     "children" / GreedyRange(Box),
+#     "next" / Peek(Bytes(8)),
+#     Probe("VersionedContainerBoxProbe"),
+# )
 
 MP4 = GreedyRange(Box)
