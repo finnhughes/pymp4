@@ -282,7 +282,9 @@ HandlerReferenceBox = Struct(
     Padding(4, pattern=b"\x00"),
     "handler_type" / String(4),
     Padding(12, pattern=b"\x00"),  # Int32ub[3]
-    "name" / Select(CString(encoding='utf8'), PascalString(Int8ub, 'utf8')),  # PascalString only for QTFF
+    # According to the Apple spec the name can be empty but is not optional, however a clip from Final cut had no name
+    # so made name optional.
+    "name" / Optional(Select(CString(encoding='utf8'), PascalString(Int8ub, 'utf8'))),  # PascalString only for QTFF
     # An empty name can use two bytes for a PascalString but since we aren't checking if it's a QT file
     # it parses as a CString and we only consume the first byte
     Optional(Const(b"\x00")),
