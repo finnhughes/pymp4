@@ -389,7 +389,7 @@ VisualSampleEntryExtensionBox = PrefixedIncludingSize(Int32ub, Struct(
 
 VisualSampleEntryBox = Struct(  # e.g. avc1
     "version" / Default(Int16ub, 0),
-    "revision" / Const(Int16ub, 0),
+    "revision" / Default(Int16ub, 0),  # revision should be Const(Int16ub, 0) but is sometimes 1
     "vendor" / Default(String(4, padchar=b" "), b"brdy"),
     "temporal_quality" / Default(Int32ub, 0),
     "spatial_quality" / Default(Int32ub, 0),
