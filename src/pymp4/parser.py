@@ -362,9 +362,10 @@ BitRateBox = Struct(
 )
 
 VisualSampleEntryExtensionBox = PrefixedIncludingSize(Int32ub, Struct(
-    "type" / String(4, padchar=b" ", paddir="right"),
+    "type" / Peek(String(4, padchar=b" ", paddir="right")),
     Embedded(Switch(this.type, {
         b"avcC": Struct(  # required for avc1
+            "type" / Const(b"avcC"),
             "version" / Const(Int8ub, 1),
             "profile" / Int8ub,
             "compatibility" / Int8ub,
@@ -383,8 +384,9 @@ VisualSampleEntryExtensionBox = PrefixedIncludingSize(Int32ub, Struct(
         # colr optional for VisualSampleEntry, may be repeated
         # clap optional for VisualSampleEntry
         b"pasp": Struct(  # Optional for VisualSampleEntry
+            "type" / Const(b"pasp"),
             "h_spacing" / Int32ub,
-            "v_spacing" /Int32ub
+            "v_spacing" / Int32ub
         ),
     }, default=Struct(RawBox))),
 ))
@@ -418,7 +420,8 @@ SampleEntryBox = PrefixedIncludingSize(Int32ub, Struct(
         b"mp4a": MP4ASampleEntryBox,
         b"enca": MP4ASampleEntryBox,
         b"avc1": VisualSampleEntryBox,
-        b"encv": VisualSampleEntryBox
+        b"encv": VisualSampleEntryBox,
+        b"mp4v": VisualSampleEntryBox
     }, Struct("data" / GreedyBytes))),
     # QT allows an optional 4 bytes terminator e.g. "StreamOn 0.9.0 Demo.mov"
     # https://developer.apple.com/library/archive/documentation/QuickTime/QTFF/QTFFChap2/qtff2.html#//apple_ref/doc/uid/TP40000939-CH204-61112
